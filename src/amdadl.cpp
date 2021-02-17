@@ -238,9 +238,6 @@ int AMDADL::findGPUs()
             return -6;
         }
 
-        printf("AMD GPU #%d:   Fans Current: %-6d Min: %-6d Max: %-6d\n",
-                index, fanCtrl.iCurrentFanSpeed, fanCtrl.iMinFanLimit, gpuCap.fanSpeed.iMax);
-
         printf("AMD GPU #%d: CClock Default: %-6d Min: %-6d Max: %-6d\n",
                 index, gpuCap.sEngineClockRange.iDefault, gpuCap.sEngineClockRange.iMin, gpuCap.sEngineClockRange.iMax);
 
@@ -249,6 +246,21 @@ int AMDADL::findGPUs()
 
         printf("AMD GPU #%d:   VDDC Default: %-6d Min: %-6d Max: %-6d\n\n",
                 index, gpuCap.svddcRange.iDefault, gpuCap.svddcRange.iMin, gpuCap.svddcRange.iMax);
+
+        printf("AMD GPU #%d:   Fans Current: %-6d Min: %-6d Max: %-6d\n",
+                index, fanCtrl.iCurrentFanSpeed, fanCtrl.iMinFanLimit, gpuCap.fanSpeed.iMax);
+
+        printf("AMD GPU #%d: %-6d iCurrentFanSpeed \n", index, fanCtrl.iCurrentFanSpeed);
+        printf("AMD GPU #%d: %-6d iCurrentFanSpeedMode \n", index, fanCtrl.iCurrentFanSpeedMode);
+        printf("AMD GPU #%d: %-6d iFanControlMode \n", index, fanCtrl.iFanControlMode);
+        printf("AMD GPU #%d: %-6d iMinFanLimit \n", index, fanCtrl.iMinFanLimit);
+        printf("AMD GPU #%d: %-6d iMinPerformanceClock \n", index, fanCtrl.iMinPerformanceClock);
+        printf("AMD GPU #%d: %-6d iMode \n", index, fanCtrl.iMode);
+        printf("AMD GPU #%d: %-6d iTargetFanSpeed \n", index, fanCtrl.iTargetFanSpeed);
+        printf("AMD GPU #%d: %-6d iTargetTemperature \n", index, fanCtrl.iTargetTemperature);
+        //printf("AMD GPU #%d: %-6d powerTuneTemperature \n", index, gpuCap.powerTuneTemperature.iMax);
+
+
     }
 
 
@@ -256,27 +268,22 @@ int AMDADL::findGPUs()
     return 0;
 }
 
-int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fan_speed)
+int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fanMin, int fanMax, int temp)
 {
-    if (index >= (int)m_gpus.size())
-    {
-        printf("Adapter index specified is %d, but %u AMD GPU's found!\n",
-                index, (uint32_t)m_gpus.size());
-
-        return -4;
-    }
-
     int retval = 0;
-    ADL_CONTEXT_HANDLE context = NULL;
-
-    amd_adapters* gpu = m_gpus.at(index);
     int iSupported = -1;
     int iEnabled = -1;
     int iVersion = -1;
+    ADL_CONTEXT_HANDLE context = NULL;
+
+    if (index >= (int)m_gpus.size())
+    {
+        printf("Adapter index specified is %d, but %u AMD GPU's found!\n", index, (uint32_t)m_gpus.size());
+        return -4;
+    }
+    amd_adapters* gpu = m_gpus.at(index);
 
     ADL2_Overdrive_Caps(context, gpu->iAdapterIndex, &iSupported, &iEnabled, &iVersion);
-    //printf("adapter[%02d]: iSupported is %d, iEnabled is %d, iVersion is %d\n", index, iSupported, iEnabled, iVersion);
-
     if (iVersion != 7)
     {
         printf("adapter[%d]: Doesn't support v7, Quit!\n", index);
@@ -303,9 +310,16 @@ int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fa
         return -7;
     }
 
+    if (fanMin > fanMax)
+        fanMin = fanMax - 100;
+
     fanCtrl.iMode = ADLODNControlType::ODNControlType_Manual;
-    fanCtrl.iMinFanLimit = (int)((fan_speed * gpuCap.fanSpeed.iMax) / 100);
-    fanCtrl.iTargetFanSpeed = (int)((fan_speed * gpuCap.fanSpeed.iMax) / 100);
+    fanCtrl.iFanControlMode = ADLODNControlType::ODNControlType_Manual;
+    fanCtrl.iMinFanLimit = (int)((fanMin * gpuCap.fanSpeed.iMax) / 100);
+    fanCtrl.iTargetFanSpeed = (int)((fanMax * gpuCap.fanSpeed.iMax) / 100);
+    fanCtrl.iTargetTemperature = temp;
+
+
 
     retval = ADL2_FanControl_Set(context, gpu->iAdapterIndex, &fanCtrl);
     if (retval != ADL_OK)
@@ -321,7 +335,7 @@ int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fa
         return -9;
     }
 
-    //CCLOCK and Voltages.
+    //Get Core Clocks and Voltages.
     ADLODNPerformanceLevels* corePerfLevels;
     int perfLevels = gpuCap.iMaximumNumberOfPerformanceLevels;
 
@@ -339,13 +353,15 @@ int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fa
         return -10;
     }
 
+    //Get Memory Clocks and Voltages.
     ADLODNPerformanceLevels* memPerfLevels;
-    size = sizeof(ADLODNPerformanceLevels) + sizeof(ADLODNPerformanceLevel)* (perfLevels - 1);
-    void* memPerfLevelsBuffer = new char[size];
-    memset(memPerfLevelsBuffer, 0, size);
+    int memLevesSize = sizeof(ADLODNPerformanceLevels) + sizeof(ADLODNPerformanceLevel)* (perfLevels - 1);
+    void* memPerfLevelsBuffer = new char[memLevesSize];
+    memset(memPerfLevelsBuffer, 0, memLevesSize);
     memPerfLevels = (ADLODNPerformanceLevels*)memPerfLevelsBuffer;
-    memPerfLevels->iSize = size;
-    memPerfLevels->iNumberOfPerformanceLevels = perfLevels;
+    memPerfLevels->iSize = memLevesSize;
+    memPerfLevels->iMode = 0; //current
+    memPerfLevels->iNumberOfPerformanceLevels = gpuCap.iMaximumNumberOfPerformanceLevels;
 
     retval = ADL2_MemoryClocks_Get(context, gpu->iAdapterIndex, memPerfLevels);
     if (retval != ADL_OK)
@@ -375,9 +391,6 @@ int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fa
         return -14;
     }
 
-    if (fan_speed > 100)
-        fan_speed = 100;
-
     corePerfLevels->iMode = ADLODNControlType::ODNControlType_Manual;
     for (int i = 1; i < perfLevels; i++)
     {
@@ -394,8 +407,11 @@ int AMDADL::setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fa
     }
 
     memPerfLevels->iMode = ADLODNControlType::ODNControlType_Manual;
-    memPerfLevels->aLevels[index].iClock = mclk;
-    memPerfLevels->aLevels[index].iVddc = mvddc;
+    for (int i = 1; i < perfLevels; i++)
+    {
+        memPerfLevels->aLevels[i].iClock = mclk;
+        memPerfLevels->aLevels[i].iVddc = mvddc;
+    }
 
     retval = ADL2_MemoryClocks_Set(context, gpu->iAdapterIndex, memPerfLevels);
     if (retval != ADL_OK)

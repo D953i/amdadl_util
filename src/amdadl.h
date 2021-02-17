@@ -24,7 +24,7 @@ public:
 
     int loadDLL();
     int findGPUs();
-    int setupGPU(int index, int cclk, int mclk, int cvddc, int mvdcc, int fan_speed);
+    int setupGPU(int index, int cclk, int mclk, int cvddc, int mvddc, int fanMin, int fanMax, int temp);
 
 
 private:
